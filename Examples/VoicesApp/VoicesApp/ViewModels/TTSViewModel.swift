@@ -26,6 +26,9 @@ class TTSViewModel {
     var maxChunkLength: Int = 200
     var splitPattern: String = "\n"  // Can be regex like "\\n" or "[.!?]\\s+"
 
+    // Streaming playback
+    var streamingPlayback: Bool = true  // Play audio as chunks are generated
+
     // Model configuration
     var modelId: String = "mlx-community/VyvoTTS-EN-Beta-4bit"
     private var loadedModelId: String?
@@ -196,8 +199,15 @@ class TTSViewModel {
         do {
             // Split text into chunks
             let chunks = chunkText(text)
-            var audioSamples: [Float] = []  // Store on CPU to avoid GPU memory buildup
+            var audioSamples: [Float] = []  // Store on CPU for saving to file
             var totalTokenCount = 0
+            let sampleRate = Double(model.sampleRate)
+
+            // Start streaming playback if enabled and we have multiple chunks
+            let useStreaming = streamingPlayback && chunks.count > 1
+            if useStreaming {
+                audioPlayer.startStreaming(sampleRate: sampleRate)
+            }
 
             for (index, chunk) in chunks.enumerated() {
                 if chunks.count > 1 {
@@ -245,14 +255,14 @@ class TTSViewModel {
 
                 // Convert to CPU samples immediately to free GPU memory
                 if let audioData = audio {
-                    // Add silence between chunks (not before the first chunk)
-                    if !audioSamples.isEmpty {
-                        let silenceDuration = 0.3  // 300ms of silence between chunks
-                        let silenceSamples = Int(Double(model.sampleRate) * silenceDuration)
-                        audioSamples.append(contentsOf: [Float](repeating: 0.0, count: silenceSamples))
+                    let samples = audioData.asArray(Float.self)
+
+                    // Stream playback immediately as chunks are ready
+                    if useStreaming {
+                        audioPlayer.scheduleAudioChunk(samples, withCrossfade: true)
                     }
 
-                    let samples = audioData.asArray(Float.self)
+                    // Also accumulate for saving to file
                     audioSamples.append(contentsOf: samples)
                 }
                 audio = nil
@@ -278,15 +288,16 @@ class TTSViewModel {
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("wav")
 
-            try saveAudioSamples(audioSamples, sampleRate: Double(model.sampleRate), to: tempURL)
+            try saveAudioSamples(audioSamples, sampleRate: sampleRate, to: tempURL)
             Memory.clearCache()
-
 
             audioURL = tempURL
             generationProgress = ""  // Clear progress
 
-            // Load audio for playback
-            audioPlayer.loadAudio(from: tempURL)
+            // For single chunk, load normally for playback
+            if !useStreaming {
+                audioPlayer.loadAudio(from: tempURL)
+            }
 
         } catch {
             errorMessage = "Generation failed: \(error.localizedDescription)"

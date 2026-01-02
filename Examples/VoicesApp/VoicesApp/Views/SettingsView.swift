@@ -152,6 +152,10 @@ struct SettingsView: View {
                     .padding(.top, 8)
 
                 if viewModel.enableChunking {
+                    Toggle("Stream audio", isOn: $viewModel.streamingPlayback)
+                        .padding(.top, 4)
+
+
                     HStack {
                         Text("Max chunk length")
                         Spacer()
@@ -198,8 +202,9 @@ struct SettingsView: View {
                     viewModel.temperature = 0.6
                     viewModel.topP = 0.8
                     viewModel.enableChunking = true
-                    viewModel.maxChunkLength = 300
+                    viewModel.maxChunkLength = 200
                     viewModel.splitPattern = "\n"
+                    viewModel.streamingPlayback = true
                 }) {
                     Text("Reset to Defaults")
                         .font(.subheadline)
