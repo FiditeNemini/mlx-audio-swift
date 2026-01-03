@@ -2,6 +2,7 @@
 .swiftpm
 .DS_Store
 .xcbkptlist
+.claude
 *.resolved
 *.xcuserdata
 *.xcuserstate
