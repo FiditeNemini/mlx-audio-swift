@@ -13,6 +13,7 @@ import MLXLMCommon
 import MLXFast
 import MLXNN
 import MLXAudioCodecs
+import MLXAudioCore
 import Combine
 
 
@@ -29,52 +30,11 @@ let endOfAI = tokenizerLength + 6  // 151675
 let padTokenId = tokenizerLength + 7  // 151676
 let audioTokensStart = tokenizerLength + 10  // 151679
 
-// MARK: - Error Types
+// MARK: - Type Aliases (using shared types from MLXAudioCore)
 
-public enum Qwen3Error: Error, LocalizedError {
-    case modelNotInitialized(String)
-    case generationFailed(String)
-    case invalidInput(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .modelNotInitialized(let message):
-            return "Model not initialized: \(message)"
-        case .generationFailed(let message):
-            return "Generation failed: \(message)"
-        case .invalidInput(let message):
-            return "Invalid input: \(message)"
-        }
-    }
-}
-
-// MARK: - Generation Types
-
-/// Information about the generation process.
-public struct Qwen3GenerationInfo: Sendable {
-    public let promptTokenCount: Int
-    public let generationTokenCount: Int
-    public let prefillTime: TimeInterval
-    public let generateTime: TimeInterval
-    public let tokensPerSecond: Double
-
-    public var summary: String {
-        """
-        Prompt:     \(promptTokenCount) tokens, \(String(format: "%.2f", Double(promptTokenCount) / prefillTime)) tokens/s, \(String(format: "%.3f", prefillTime))s
-        Generation: \(generationTokenCount) tokens, \(String(format: "%.2f", tokensPerSecond)) tokens/s, \(String(format: "%.3f", generateTime))s
-        """
-    }
-}
-
-/// Events emitted during audio generation.
-public enum Qwen3Generation: Sendable {
-    /// A generated token ID
-    case token(Int)
-    /// Generation statistics
-    case info(Qwen3GenerationInfo)
-    /// Final generated audio
-    case audio(MLXArray)
-}
+public typealias Qwen3Error = AudioGenerationError
+public typealias Qwen3GenerationInfo = AudioGenerationInfo
+public typealias Qwen3Generation = AudioGeneration
 
 // MARK: - Decode
 
