@@ -1,7 +1,6 @@
 import Foundation
 import MLX
 import MLXNN
-import MLXRandom
 
 // Available voices for Orpheus
 public enum OrpheusVoice: String, CaseIterable {
@@ -206,7 +205,7 @@ public class OrpheusTTS {
             // Clear cache periodically
             if (i + 1) % 50 == 0 {
                 Profiler.time("GPU cache clear") {
-                    MLX.GPU.clearCache()
+                    Memory.clearCache()
                 }
             }
             

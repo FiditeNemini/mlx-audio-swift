@@ -59,40 +59,6 @@ extension MLXArray {
         return result
     }
 
-    /// Returns a new array of zeros with the same shape and type as the input array.
-    ///
-    /// - Returns: A new array filled with zeros, matching the shape and type of the input array.
-    func zerosLike() -> MLXArray {
-        switch self.dtype {
-        case .float32:
-            return MLXArray.zeros(self.shape, type: Float.self)
-        case .float16:
-            return MLXArray.zeros(self.shape, type: Float16.self)
-        case .int32:
-            return MLXArray.zeros(self.shape, type: Int32.self)
-        case .int64:
-            return MLXArray.zeros(self.shape, type: Int64.self)
-        case .bool:
-            return MLXArray.zeros(self.shape, type: Bool.self)
-        default:
-            return MLXArray.zeros(self.shape, type: Float.self) // Default to float32
-        }
-    }
-
-    /// Converts the MLXArray to a Swift array of the specified type.
-    func asArray<T>(_ type: T.Type) -> [T] {
-        // First convert to a list of MLXArray elements
-        let elements = self.asArray(type)
-        
-        // Then convert each element to the target type
-        return elements.compactMap { element in
-            if let value = element as? T {
-                return value
-            }
-            return nil
-        }
-    }
-
     /// Stacks arrays along a new axis.
     ///
     /// - Parameters:

@@ -4,7 +4,6 @@
 import Foundation
 import MLX
 import MLXNN
-import MLXRandom
 
 class SineGen {
   private let sineAmp: Float

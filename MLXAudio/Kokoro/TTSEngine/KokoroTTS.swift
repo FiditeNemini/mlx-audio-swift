@@ -550,7 +550,7 @@ public class KokoroTTS {
             // Handle error silently
           }
         }
-        MLX.GPU.clearCache()
+          Memory.clearCache()
       }
 
       // Reset model after completing a long text to free memory

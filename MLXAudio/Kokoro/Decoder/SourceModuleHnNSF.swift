@@ -4,7 +4,6 @@
 import Foundation
 import MLX
 import MLXNN
-import MLXRandom
 
 class SourceModuleHnNSF: Module {
   private let sineAmp: Float
