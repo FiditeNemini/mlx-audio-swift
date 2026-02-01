@@ -1,7 +1,7 @@
 import Foundation
 import Hub
 import HuggingFace
-import MLX
+@preconcurrency import MLX
 import MLXAudioCodecs
 import MLXAudioCore
 import MLXLMCommon
@@ -106,29 +106,13 @@ public final class MarvisTTSModel: Module {
         return cacheDirectory.appending(component: cacheFilename)
     }
     
-    private func tokenizeAudio(_ audioURL: URL, addEOS: Bool = true) throws -> (MLXArray, MLXArray) {
+    private func tokenizeAudio(_ audio: MLXArray, addEOS: Bool = true) throws -> (MLXArray, MLXArray) {
         let K = model.args.audioNumCodebooks
         
         var codes: MLXArray
-        let cacheURL = cacheURL(for: audioURL)
-        if let cachedCodes = try? MLX.loadArray(url: cacheURL) {
-            codes = cachedCodes
-        } else {
-            let (sampleRate, audio) = try loadAudioArray(from: audioURL)
-            guard sampleRate == 24000 else {
-                throw MarvisTTSModelError.invalidRefAudio("Reference audio must be single-channel (mono) 24kHz, in WAV format.")
-            }
-            
-            let x = audio.reshaped([1, 1, audio.shape[0]])
-            let encoded = encodeChunked(x) // [1, K, Tq]
-            codes = split(encoded, indices: [1], axis: 0)[0].reshaped([K, encoded.shape[2]])
-            
-            do {
-                try MLX.save(array: codes, url: cacheURL)
-            } catch {
-                print("Unable to save cached prompt: \(error)")
-            }
-        }
+        let x = audio.reshaped([1, 1, audio.shape[0]])
+        let encoded = encodeChunked(x) // [1, K, Tq]
+        codes = split(encoded, indices: [1], axis: 0)[0].reshaped([K, encoded.shape[2]])
         
         let frameW = K + 1
         
@@ -158,7 +142,7 @@ public final class MarvisTTSModel: Module {
     
     private func tokenizeSegment(_ segment: Segment, addEOS: Bool = true) throws -> (MLXArray, MLXArray) {
         let (txt, txtMask) = tokenizeTextSegment(text: segment.text, speaker: segment.speaker)
-        let (aud, audMask) = try tokenizeAudio(segment.audioURL, addEOS: addEOS)
+        let (aud, audMask) = try tokenizeAudio(segment.audio, addEOS: addEOS)
         return (concatenated([txt, aud], axis: 0), concatenated([txtMask, audMask], axis: 0))
     }
 }
@@ -306,12 +290,12 @@ private func marvisLoadWeights(from directory: URL) throws -> [String: MLXArray]
 private struct Segment {
     public let speaker: Int
     public let text: String
-    public let audioURL: URL
+    public let audio: MLXArray
     
-    public init(speaker: Int, text: String, audioURL: URL) {
+    public init(speaker: Int, text: String, audio: MLXArray) {
         self.speaker = speaker
         self.text = text
-        self.audioURL = audioURL
+        self.audio = audio
     }
 }
 
@@ -338,7 +322,7 @@ public extension MarvisTTSModel {
         text: [String],
         voice: Voice? = .conversationalA,
         qualityLevel: QualityLevel = .maximum,
-        refAudioURL: URL?,
+        refAudio: MLXArray?,
         refText: String?,
         splitPattern: String? = #"(\n+)"#,
         streamingInterval: Double = 0.5
@@ -348,7 +332,7 @@ public extension MarvisTTSModel {
             text: text,
             voice: voice,
             qualityLevel: qualityLevel,
-            refAudioURL: refAudioURL,
+            refAudio: refAudio,
             refText: refText,
             streamingInterval: streamingInterval
         ) {
@@ -361,7 +345,7 @@ public extension MarvisTTSModel {
         text: String,
         voice: Voice? = .conversationalA,
         qualityLevel: QualityLevel = .maximum,
-        refAudioURL: URL? = nil,
+        refAudio: MLXArray? = nil,
         refText: String? = nil,
         splitPattern: String? = #"(\n+)"#,
         streamingInterval: Double = 0.5
@@ -370,7 +354,7 @@ public extension MarvisTTSModel {
             text: Self.textPieces(text, splitPattern: splitPattern),
             voice: voice,
             qualityLevel: qualityLevel,
-            refAudioURL: refAudioURL,
+            refAudio: refAudio,
             refText: refText,
             streamingInterval: streamingInterval
         )
@@ -380,7 +364,7 @@ public extension MarvisTTSModel {
         text: [String],
         voice: Voice? = .conversationalA,
         qualityLevel: QualityLevel = .maximum,
-        refAudioURL: URL? = nil,
+        refAudio: MLXArray? = nil,
         refText: String? = nil,
         streamingInterval: Double = 0.5
     ) -> AsyncThrowingStream<GenerationResult, Error> {
@@ -389,13 +373,13 @@ public extension MarvisTTSModel {
         Task { @Sendable [weak self, continuation] in
             guard let self else { return }
             do {
-                guard voice != nil || refAudioURL != nil else {
-                    throw MarvisTTSModelError.invalidArgument("`voice` or `refAudioURL`/`refText` must be specified.")
+                guard voice != nil || refAudio != nil else {
+                    throw MarvisTTSModelError.invalidArgument("`voice` or `refAudio`/`refText` must be specified.")
                 }
                 
                 let context: Segment
-                if let refAudioURL, let refText {
-                    context = Segment(speaker: 0, text: refText, audioURL: refAudioURL)
+                if let refAudio, let refText {
+                    context = Segment(speaker: 0, text: refText, audio: refAudio)
                 } else if let voice {
                     var refAudioURL: URL?
                     for promptURL in _promptURLs ?? [] {
@@ -413,7 +397,8 @@ public extension MarvisTTSModel {
                         throw MarvisTTSModelError.voiceNotFound
                     }
                     
-                    context = Segment(speaker: 0, text: refText, audioURL: refAudioURL)
+                    let (_, refAudio) = try loadAudioArray(from: refAudioURL)
+                    context = Segment(speaker: 0, text: refText, audio: refAudio)
                 } else {
                     throw MarvisTTSModelError.voiceNotFound
                 }
@@ -426,7 +411,7 @@ public extension MarvisTTSModel {
                     if Task.isCancelled { break outerLoop }
                     
                     let generationText = (context.text + " " + prompt).trimmingCharacters(in: .whitespaces)
-                    let seg = Segment(speaker: 0, text: generationText, audioURL: context.audioURL)
+                    let seg = Segment(speaker: 0, text: generationText, audio: context.audio)
                     
                     model.resetCaches()
                     _streamingDecoder.reset()
@@ -565,6 +550,9 @@ extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
     public func generate(
         text: String,
         voice: String?,
+        refAudio: MLXArray?,
+        refText: String?,
+        language: String?,
         generationParameters: GenerateParameters
     ) async throws -> MLXArray {
         _ = generationParameters
@@ -574,8 +562,8 @@ extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
             text: [text],
             voice: resolvedVoice,
             qualityLevel: .maximum,
-            refAudioURL: nil,
-            refText: nil,
+            refAudio: refAudio,
+            refText: refText,
             streamingInterval: 0.5
         )
 
@@ -585,6 +573,9 @@ extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
     public func generateStream(
         text: String,
         voice: String?,
+        refAudio: MLXArray?,
+        refText: String?,
+        language: String?,
         generationParameters: GenerateParameters
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
@@ -600,8 +591,8 @@ extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
                     text: text,
                     voice: resolvedVoice,
                     qualityLevel: .maximum,
-                    refAudioURL: nil,
-                    refText: nil,
+                    refAudio: refAudio,
+                    refText: refText,
                     streamingInterval: 0.5
                 ) {
                     continuation.yield(.audio(MLXArray(chunk.audio)))
