@@ -75,7 +75,14 @@ enum App {
         print("Generating")
         let started = CFAbsoluteTimeGetCurrent()
 
-        let audioData = try await loadedModel.generate(text: text, voice: voice, generationParameters: GenerateParameters()).asArray(Float.self)
+        let audioData = try await loadedModel.generate(
+            text: text,
+            voice: voice,
+            refAudio: nil,
+            refText: nil,
+            language: nil,
+            generationParameters: GenerateParameters()
+        ).asArray(Float.self)
 
         let outputURL = makeOutputURL(outputPath: outputPath)
         let sampleRate = Double(loadedModel.sampleRate)
