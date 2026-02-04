@@ -18,6 +18,7 @@ public struct PocketTTSState {
 
 public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sendable {
     public let config: PocketTTSModelConfig
+    private let modelFolder: URL
     @ModuleInfo(key: "flow_lm") public var flow_lm: FlowLMModel
     @ModuleInfo(key: "mimi") public var mimi: MimiAdapter
     public var speaker_proj_weight: MLXArray
@@ -29,8 +30,9 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
 
     public var sampleRate: Int { config.mimi.sampleRate }
 
-    private init(config: PocketTTSModelConfig, flowLM: FlowLMModel, mimi: MimiAdapter) {
+    private init(config: PocketTTSModelConfig, modelFolder: URL, flowLM: FlowLMModel, mimi: MimiAdapter) {
         self.config = config
+        self.modelFolder = modelFolder
         self._flow_lm = ModuleInfo(wrappedValue: flowLM)
         self._mimi = ModuleInfo(wrappedValue: mimi)
         self.speaker_proj_weight = MLXArray.zeros([config.flowLM.transformer.dModel, config.mimi.quantizer.outputDimension])
@@ -44,11 +46,11 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
             modelFolder: modelFolder
         )
         let mimi = MimiAdapter.fromConfig(config.mimi)
-        return PocketTTSModel(config: config, flowLM: flowLM, mimi: mimi)
+        return PocketTTSModel(config: config, modelFolder: modelFolder, flowLM: flowLM, mimi: mimi)
     }
 
     public func initState() -> PocketTTSState {
-        return PocketTTSState(flowCache: flow_lm.makeCache())
+        PocketTTSState(flowCache: flow_lm.makeCache())
     }
 
     private func runFlowLM(
@@ -111,6 +113,23 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
         case audio(MLXArray)
     }
 
+    public static func loadPredefinedVoice(
+        _ voiceName: String,
+        modelFolder: URL,
+        progressHandler: @escaping (Progress) -> Void = { _ in }
+    ) async throws -> MLXArray? {
+        _ = progressHandler
+        let fileURL = modelFolder.appendingPathComponent("\(voiceName).safetensors")
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            return nil
+        }
+        let arrays = try MLX.loadArrays(url: fileURL)
+        guard let prompt = arrays["audio_prompt"] else {
+            return nil
+        }
+        return prompt
+    }
+
     private func resolveAudioPrompt(
         voice: String?,
         refAudio: MLXArray?,
@@ -120,38 +139,24 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
             return .audio(normalizeAudio(refAudio))
         }
 
-        let prompt = voice?.lowercased() ?? defaultAudioPrompt
-        if let _ = PocketTTSUtils.predefinedVoices[prompt] {
-            let emb = try await PocketTTSUtils.loadPredefinedVoice(prompt, progressHandler: progressHandler)
-            return .embedding(emb)
+        let voice = voice?.lowercased() ?? defaultAudioPrompt
+        guard let emb = try await Self.loadPredefinedVoice(
+            voice,
+            modelFolder: modelFolder,
+            progressHandler: progressHandler
+        ) else {
+            throw NSError(domain: "PocketTTSModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing audio prompt for voice: \(voice)"])
         }
-
-        if prompt.hasPrefix("http://") || prompt.hasPrefix("https://") || prompt.hasPrefix("hf://") {
-            let url = try await PocketTTSUtils.downloadIfNecessary(prompt, progressHandler: progressHandler)
-            let (sr, audio) = try loadAudioArray(from: url)
-            _ = sr // TODO: resample if needed
-            return .audio(normalizeAudio(audio))
-        }
-
-        if FileManager.default.fileExists(atPath: prompt) {
-            let url = URL(fileURLWithPath: prompt)
-            let (sr, audio) = try loadAudioArray(from: url)
-            _ = sr // TODO: resample if needed
-            return .audio(normalizeAudio(audio))
-        }
-
-        let emb = try await PocketTTSUtils.loadPredefinedVoice(defaultAudioPrompt, progressHandler: progressHandler)
         return .embedding(emb)
     }
 
     private func getStateForAudioPrompt(_ prompt: AudioPrompt) -> PocketTTSState {
         var state = initState()
-        let conditioning: MLXArray
-        switch prompt {
+        let conditioning: MLXArray = switch prompt {
         case .embedding(let emb):
-            conditioning = emb
+            emb
         case .audio(let audio):
-            conditioning = encodeAudio(audio)
+            encodeAudio(audio)
         }
 
         _ = runFlowLMAndIncrementStep(&state, audioConditioning: conditioning)
@@ -226,9 +231,9 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
         _ = runFlowLMAndIncrementStep(&state, textTokens: prepared.tokens)
 
         var backboneInput = MLXArray.ones([1, 1, flow_lm.ldim]) * MLXArray(Float.nan)
-        var eosStep: Int? = nil
+        var eosStep: Int?
 
-        for step in 0..<maxGenLen {
+        for step in 0 ..< maxGenLen {
             let (nextLatent, isEos) = runFlowLMAndIncrementStep(&state, backboneInputLatents: backboneInput)
             if eosStep == nil {
                 let eos = isEos.asArray(Bool.self).first ?? false
@@ -318,11 +323,10 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
         let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
             ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
 
-        let client: HubClient
-        if let token = hfToken, !token.isEmpty {
-            client = HubClient(host: HubClient.defaultHost, bearerToken: token)
+        let client = if let token = hfToken, !token.isEmpty {
+            HubClient(host: HubClient.defaultHost, bearerToken: token)
         } else {
-            client = HubClient.default
+            HubClient.default
         }
         let cache = client.cache ?? HubCache.default
 
@@ -357,7 +361,7 @@ private func resolveOrDownloadPocketTTSModel(
         let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
         let hasConfig = files?.contains { $0.lastPathComponent == "config.json" } ?? false
         let hasWeights = files?.contains { $0.pathExtension == "safetensors" } ?? false
-        if hasConfig && hasWeights {
+        if hasConfig, hasWeights {
             return modelDir
         }
     }
