@@ -1935,6 +1935,41 @@ struct MossTranscribeDiarizeModuleSetupTests {
         #expect(segments[1]["speaker_id"] as? String == "S02")
     }
 
+    @Test func mossParseSegmentsAppliesChunkOffset() {
+        let text = "[0.48][S01]hello[1.66]"
+
+        let segments = MossTranscribeDiarizeModel.parseSegments(
+            text: text,
+            fallbackEnd: 10.0,
+            offsetSeconds: 30.0
+        )
+
+        #expect(segments.count == 1)
+        #expect(segments[0]["start"] as? Double == 30.48)
+        #expect(segments[0]["end"] as? Double == 31.66)
+        #expect(segments[0]["speaker_id"] as? String == "S01")
+    }
+
+    @Test func mossOffsetTimestampTags() {
+        let text = "[0.48][S01]hello[1.66][2.00][S02]world[3.50]"
+
+        let shifted = MossTranscribeDiarizeModel.offsetTimestampTags(in: text, by: 60.0)
+
+        #expect(shifted == "[60.48][S01]hello[61.66][62.00][S02]world[63.50]")
+    }
+
+    @Test func mossTimestampHelpersHandleCommaDecimals() {
+        let text = "[0,48][S01]hello[1,66]"
+
+        let shifted = MossTranscribeDiarizeModel.offsetTimestampTags(in: text, by: 30.0)
+        let segments = MossTranscribeDiarizeModel.parseSegments(text: text, fallbackEnd: 10.0, offsetSeconds: 30.0)
+
+        #expect(shifted == "[30.48][S01]hello[31.66]")
+        #expect(segments.count == 1)
+        #expect(segments[0]["start"] as? Double == 30.48)
+        #expect(segments[0]["end"] as? Double == 31.66)
+    }
+
     @Test func mossParseSegmentsFallback() {
         let text = "[S01] hello world"
 
@@ -1993,6 +2028,43 @@ struct CohereTranscribeModuleSetupTests {
         #expect(config.decoder.numLayers == 8)
         #expect(config.decoder.maxSequenceLength == 1024)
         #expect(config.quantization?.bits == 8)
+    }
+
+    @Test func cohereConfigDecodingUsesHeadClassCountWhenVocabSizeMissing() throws {
+        let json = """
+        {
+          "model_type": "cohere_asr",
+          "sample_rate": 16000,
+          "max_audio_clip_s": 35,
+          "head": {
+            "num_classes": 16384
+          },
+          "encoder": {
+            "d_model": 1280,
+            "ff_expansion_factor": 4,
+            "n_heads": 8,
+            "conv_kernel_size": 9,
+            "n_layers": 48,
+            "pos_emb_max_len": 5000,
+            "subsampling_conv_channels": 256,
+            "subsampling_factor": 8,
+            "feat_in": 128
+          },
+          "transf_decoder": {
+            "config_dict": {
+              "hidden_size": 1024,
+              "inner_size": 4096,
+              "num_attention_heads": 8,
+              "num_layers": 8,
+              "max_sequence_length": 1024,
+              "vocab_size": "None"
+            }
+          }
+        }
+        """
+
+        let config = try JSONDecoder().decode(CohereTranscribeConfig.self, from: Data(json.utf8))
+        #expect(config.vocabSize == 16384)
     }
 
     @Test func cohereAudioFeaturesShape() {
